@@ -756,6 +756,11 @@ onChildAdded(messagesQuery, async (snap) => {
     extraData = { uid: msg.uid, name: username };
   }
 
+  const side = (auth.currentUser && msg.uid === auth.currentUser.uid) ? "user" : "other";
+  if (shouldAnimateTypingForMessage(msg.ts)) {
+    await showTypingIndicator({ side, img: pfp });
+  }
+
   addMessage(
     username,
     msg.text,
@@ -798,6 +803,7 @@ const chatBox=document.getElementById("chatBox");
 const messageInput=document.getElementById("messageInput");
 const chatLoading = document.getElementById("chatLoading");
 const usersList = document.getElementById("usersList");
+const typingAnimationMinTs = Date.now();
 let username = localStorage.getItem("username");
 let userPFP = localStorage.getItem("pfp");
 let isOwner=false;
@@ -894,6 +900,47 @@ window.addEventListener("blur", () => {
 messageInput.addEventListener("keydown", e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendMessage(); } });
 
 function timeNow(){ return new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
+
+function shouldAnimateTypingForMessage(ts) {
+  if (!ts) return false;
+  return ts >= typingAnimationMinTs;
+}
+
+function showTypingIndicator({ side, img }) {
+  return new Promise((resolve) => {
+    const stickToBottom = shouldAutoScroll();
+    const indicator = document.createElement("div");
+    indicator.className = `message ${side} typing-indicator`;
+
+    const safeImg = img || "https://via.placeholder.com/36";
+    indicator.innerHTML = `
+      ${side === "other" ? `<img src="${safeImg}">` : ``}
+      <div class="bubble"><span class="typing-dots">.</span></div>
+      ${side === "user" ? `<img src="${safeImg}">` : ``}
+    `;
+
+    const dots = indicator.querySelector(".typing-dots");
+    const frames = [".", "..", "..."];
+    let frameIndex = 0;
+
+    const intervalId = setInterval(() => {
+      frameIndex = (frameIndex + 1) % frames.length;
+      dots.textContent = frames[frameIndex];
+    }, 250);
+
+    chatBox.appendChild(indicator);
+
+    if (stickToBottom) {
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    setTimeout(() => {
+      clearInterval(intervalId);
+      indicator.remove();
+      resolve();
+    }, 900);
+  });
+}
 
 function addMessage(name,text,img,time,key,data){
 const stickToBottom = shouldAutoScroll();
