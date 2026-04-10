@@ -98,6 +98,18 @@ margin-bottom: 10px;
 .name .owner-star { color: orange; font-size: 12px; }
 .time { font-size: 9px; opacity: 0.6; margin-top: 6px; text-align: right; }
 
+.typing-indicator .bubble {
+  min-width: 90px;
+  padding: 10px 16px;
+}
+
+.typing-dots {
+  font-size: 16px;
+  letter-spacing: 1px;
+  min-width: 20px;
+  display: inline-block;
+}
+
 /* DELETE BUTTON - PIXEL TRASHCAN */
 .bubble button {
 background: black;
@@ -131,6 +143,17 @@ transition: background 0.3s ease;
 .settings-btn { position: fixed; top: 12px; right: 12px; background: #020617; border: 2px solid #1e3a8a; color: #bfdbfe; font-family: inherit; padding: 6px 10px; cursor: pointer; z-index: 1001; }
 .settings-panel { position: fixed; top: 0; right: -400px; width: 400px; height: 100%; background: #020617; border-left: 2px solid #1e3a8a; padding: 14px; transition: right 0.35s ease; z-index: 1000; font-family: inherit; display: flex; flex-direction: column; overflow-y: auto; }
 .settings-panel.open { right: 0; }
+.users-btn { position: fixed; top: 12px; left: 12px; background: #020617; border: 2px solid #1e3a8a; color: #bfdbfe; font-family: inherit; padding: 6px 10px; cursor: pointer; z-index: 1001; }
+.users-panel { position: fixed; top: 0; left: -300px; width: 300px; height: 100%; background: #020617; border-right: 2px solid #1e3a8a; padding: 14px; transition: left 0.35s ease; z-index: 1000; font-family: inherit; overflow-y: auto; }
+.users-panel.open { left: 0; }
+.users-panel h3 { font-size: 12px; margin-bottom: 10px; }
+.user-row { display: flex; align-items: center; gap: 10px; border: 1px solid #1e3a8a; padding: 8px; margin-bottom: 8px; background: #0b1224; }
+.user-row img { width: 30px; height: 30px; border: 2px solid #1e3a8a; border-radius: 4px; }
+.user-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.user-name { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-status { font-size: 9px; opacity: 0.8; }
+.user-status.online { color: #86efac; }
+.user-status.offline { color: #94a3b8; }
 .settings-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .tab { flex: 1; font-family: inherit; background: #020617; border: 2px solid #1e3a8a; color: #bfdbfe; padding: 6px; cursor: pointer; font-size: 11px; }
 .tab.active { background: #1e3a8a; }
@@ -413,6 +436,12 @@ transform:scale(1.15);
 </div>
 
 <button class="settings-btn" onclick="toggleSettings()">⚙</button>
+<button class="users-btn" onclick="toggleUsersPanel()">users</button>
+
+<div class="users-panel" id="usersPanel">
+  <h3>online users</h3>
+  <div id="usersList"></div>
+</div>
 
 <div class="settings-panel" id="settingsPanel">
 <div class="settings-tabs">
@@ -652,7 +681,8 @@ import {
   query,
   limitToLast,
   onValue,
-  onChildRemoved
+  onChildRemoved,
+  onDisconnect
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 /* Firebase setup */
@@ -767,17 +797,23 @@ setInterval(updateConnectionStatus,20000);
 const chatBox=document.getElementById("chatBox");
 const messageInput=document.getElementById("messageInput");
 const chatLoading = document.getElementById("chatLoading");
+const usersList = document.getElementById("usersList");
 let username = localStorage.getItem("username");
 let userPFP = localStorage.getItem("pfp");
 let isOwner=false;
 let firstMessageLoaded=false;
+let typingTimeout = null;
+let typingFrameIndex = 0;
+let usersDirectory = {};
+let presenceDirectory = {};
+let currentUserUid = null;
 
 const profileCache = {};
 let lastNowPlaying = null; // tracks last track sent to chat
 
 function shouldAutoScroll() {
-  const threshold = 80;
-  return chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < threshold;
+  const distanceFromBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight;
+  return distanceFromBottom <= 2;
 }
 
 async function fetchProfileByUrl(profileUrl) {
@@ -914,6 +950,190 @@ setTimeout(()=>{ chatLoading.style.display="none"; },500);
 }
 }
 
+window.toggleUsersPanel = () => {
+  document.getElementById("usersPanel").classList.toggle("open");
+};
+
+function renderUsersDirectory() {
+  const entries = Object.entries(usersDirectory);
+
+  if (!entries.length) {
+    usersList.innerHTML = `<div style="font-size:10px; opacity:0.7;">No users found yet.</div>`;
+    return;
+  }
+
+  entries.sort((a, b) => {
+    const aOnline = !!presenceDirectory[a[0]]?.online;
+    const bOnline = !!presenceDirectory[b[0]]?.online;
+    if (aOnline !== bOnline) return aOnline ? -1 : 1;
+    const aName = (a[1].username || "player").toLowerCase();
+    const bName = (b[1].username || "player").toLowerCase();
+    return aName.localeCompare(bName);
+  });
+
+  usersList.innerHTML = entries.map(([uid, data]) => {
+    const online = !!presenceDirectory[uid]?.online;
+    const safeName = data.username || "PLAYER";
+    const safePfp = data.pfp || "https://via.placeholder.com/36";
+    return `
+      <div class="user-row">
+        <img src="${safePfp}" alt="${safeName}">
+        <div class="user-meta">
+          <div class="user-name">${safeName}</div>
+          <div class="user-status ${online ? "online" : "offline"}">${online ? "online" : "offline"}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function refreshUsersDirectory(snapshotValue) {
+  const rows = snapshotValue || {};
+  const nextDirectory = {};
+
+  await Promise.all(Object.entries(rows).map(async ([uid, pointer]) => {
+    let profile = null;
+    if (pointer?.profileUrl) {
+      profile = await fetchProfileByUrl(pointer.profileUrl);
+    }
+
+    nextDirectory[uid] = {
+      username: profile?.username || pointer?.username || "PLAYER",
+      pfp: profile?.pfp || pointer?.pfp || "https://via.placeholder.com/36"
+    };
+  }));
+
+  usersDirectory = nextDirectory;
+  renderUsersDirectory();
+}
+
+function setupTypingAnimationTicker() {
+  setInterval(() => {
+    const frames = [".", "..", "..."];
+    typingFrameIndex = (typingFrameIndex + 1) % frames.length;
+    document.querySelectorAll(".typing-indicator .typing-dots").forEach((dots) => {
+      dots.textContent = frames[typingFrameIndex];
+    });
+  }, 300);
+}
+
+function renderLiveTypingIndicators(typingMap) {
+  const activeTypers = Object.entries(typingMap || {}).filter(([uid, data]) => {
+    if (!data?.isTyping) return false;
+    if (!auth.currentUser) return false;
+    if (uid === auth.currentUser.uid) return false;
+    return true;
+  });
+
+  const activeSet = new Set(activeTypers.map(([uid]) => uid));
+
+  chatBox.querySelectorAll(".message.typing-indicator[data-typing-uid]").forEach((node) => {
+    if (!activeSet.has(node.dataset.typingUid)) {
+      node.remove();
+    }
+  });
+
+  activeTypers.forEach(([uid, data]) => {
+    let node = chatBox.querySelector(`.message.typing-indicator[data-typing-uid="${uid}"]`);
+    const fallbackProfile = usersDirectory[uid] || {};
+    const safeImg = data.pfp || fallbackProfile.pfp || "https://via.placeholder.com/36";
+    const safeName = data.username || fallbackProfile.username || "PLAYER";
+
+    if (!node) {
+      node = document.createElement("div");
+      node.className = "message other typing-indicator";
+      node.dataset.typingUid = uid;
+      node.innerHTML = `
+        <img src="${safeImg}" class="clickable-avatar">
+        <div class="bubble">
+          <div class="name">${safeName}</div>
+          <span class="typing-dots">...</span>
+        </div>
+      `;
+      chatBox.appendChild(node);
+    } else {
+      const imgNode = node.querySelector("img");
+      const nameNode = node.querySelector(".name");
+      if (imgNode) imgNode.src = safeImg;
+      if (nameNode) nameNode.textContent = safeName;
+    }
+  });
+
+  if (shouldAutoScroll()) {
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }
+}
+
+function setTypingState(isTyping) {
+  const uid = auth.currentUser?.uid || currentUserUid;
+  if (!uid) return;
+  const typingRef = ref(db, `typing/${uid}`);
+
+  if (!isTyping) {
+    remove(typingRef);
+    return;
+  }
+
+  set(typingRef, {
+    isTyping: true,
+    username: localStorage.getItem("username") || "PLAYER",
+    pfp: localStorage.getItem("pfp") || "https://via.placeholder.com/36",
+    ts: Date.now()
+  });
+}
+
+function setupTypingHandlers() {
+  messageInput.addEventListener("input", () => {
+    const hasValue = !!messageInput.value.trim();
+    if (!hasValue) {
+      setTypingState(false);
+      if (typingTimeout) clearTimeout(typingTimeout);
+      return;
+    }
+
+    setTypingState(true);
+    if (typingTimeout) clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => setTypingState(false), 1200);
+  });
+}
+
+function setupPresenceTracking(user) {
+  const statusRef = ref(db, `presence/${user.uid}`);
+  const typingRef = ref(db, `typing/${user.uid}`);
+  const connectedRef = ref(db, ".info/connected");
+
+  onValue(connectedRef, (snap) => {
+    if (snap.val() !== true) return;
+
+    onDisconnect(statusRef).set({
+      online: false,
+      lastSeen: Date.now()
+    });
+    onDisconnect(typingRef).remove();
+
+    set(statusRef, {
+      online: true,
+      lastSeen: Date.now()
+    });
+  });
+}
+
+setupTypingAnimationTicker();
+setupTypingHandlers();
+
+onValue(ref(db, "typing"), (snap) => {
+  renderLiveTypingIndicators(snap.val() || {});
+});
+
+onValue(ref(db, "profiles"), async (snap) => {
+  await refreshUsersDirectory(snap.val());
+});
+
+onValue(ref(db, "presence"), (snap) => {
+  presenceDirectory = snap.val() || {};
+  renderUsersDirectory();
+});
+
 setTimeout(() => {
   if (!firstMessageLoaded) {
     chatLoading.style.opacity = 0;
@@ -953,6 +1173,8 @@ window.sendMessage = async () => {
   if (!text) return;
 
   messageInput.value = "";
+  setTypingState(false);
+  if (typingTimeout) clearTimeout(typingTimeout);
 
   const uid = auth.currentUser.uid;
 
@@ -1653,9 +1875,19 @@ loginFeedback.style.color="red";
 
 onAuthStateChanged(auth,(user)=>{
 if(user){
+currentUserUid = user.uid;
 loginScreen.style.display="none";
+setupPresenceTracking(user);
 }else{
+if (currentUserUid) {
+  set(ref(db, `presence/${currentUserUid}`), {
+    online: false,
+    lastSeen: Date.now()
+  });
+}
 loginScreen.style.display="flex";
+setTypingState(false);
+currentUserUid = null;
 }
 });
 
