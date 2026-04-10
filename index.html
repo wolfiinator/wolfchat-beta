@@ -1219,8 +1219,8 @@ function initRealtimeExtras() {
   });
 }
 
-try {
-  initRealtimeExtras();
+initRealtimeExtras();
+
 async function getProfileFromAccount(uid) {
   try {
     const snap = await get(ref(db, "profiles/" + uid));
