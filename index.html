@@ -90,6 +90,16 @@ margin-bottom: 10px;
 }
 .chat-box.loaded { opacity: 1; }
 
+.new-messages-button {
+  position: absolute;
+  right: 18px;
+  bottom: 72px;
+  z-index: 20;
+  display: none;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+}
+.new-messages-button.visible { display: block; }
+
 /* Keep browser chrome and focus states inside the blue/black palette. */
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-track { background: #020617; }
@@ -627,6 +637,7 @@ width:320px;
 <span>Loading messages...</span>
 </div>
 <div class="chat-box" id="chatBox"></div>
+<button id="newMessagesButton" class="new-messages-button" type="button">NEW MESSAGES ↓</button>
 <div class="input-box">
 <div class="connection-indicator" id="connectionIndicator" title="Checking connection..."></div>
 <button id="emojiBtn">😀</button>
@@ -687,43 +698,25 @@ import { get } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-databas
 
 const renderedMessages = new Set();
 let initialMessagesLoaded = false;
+let initialMessagesTimer;
 
 const messagesRootRef = ref(db, "messages");
 const messagesQuery = query(messagesRootRef, limitToLast(50));
 
-onChildAdded(messagesQuery, async (snap) => {
+onChildAdded(messagesQuery, (snap) => {
   const msg = snap.val();
   const key = snap.key;
 
   if (renderedMessages.has(key)) return;
   renderedMessages.add(key);
 
-  let username = msg.username;
-  let pfp = msg.pfp;
-  let extraData = { uid: msg.uid, name: username || "PLAYER" };
-
-  try {
-    let profile = null;
-
-    if (msg.uid) {
-      profile = await getProfileFromAccount(msg.uid);
-    }
-
-    if (profile) {
-      username = profile.username || username || "PLAYER";
-      pfp = profile.pfp || pfp || "https://via.placeholder.com/36";
-      extraData = { ...profile, uid: msg.uid, name: username };
-    } else {
-      username = username || "PLAYER";
-      pfp = pfp || "https://via.placeholder.com/36";
-      extraData = { uid: msg.uid, name: username };
-    }
-  } catch (e) {
-    console.error("Profile fetch failed:", e);
-    username = username || "PLAYER";
-    pfp = pfp || "https://via.placeholder.com/36";
-    extraData = { uid: msg.uid, name: username };
-  }
+  // A message carries the profile as it looked when it was sent. This avoids a
+  // Firebase profile read for every message and keeps old messages self-contained.
+  const extraData = sanitizeProfile(msg.profile || { username: msg.username, pfp: msg.pfp });
+  const username = extraData.username || msg.username || "PLAYER";
+  const pfp = extraData.pfp || msg.pfp || "https://via.placeholder.com/36";
+  extraData.uid = msg.uid;
+  extraData.name = username;
 
   addMessage(
     username,
@@ -765,6 +758,7 @@ updateConnectionStatus();
 const chatBox=document.getElementById("chatBox");
 const messageInput=document.getElementById("messageInput");
 const chatLoading = document.getElementById("chatLoading");
+const newMessagesButton = document.getElementById("newMessagesButton");
 let username = localStorage.getItem("username");
 let userPFP = localStorage.getItem("pfp");
 let isOwner=false;
@@ -773,13 +767,21 @@ let firstMessageLoaded=false;
 let lastNowPlaying = null; // tracks last track sent to chat
 
 function shouldAutoScroll() {
-  const threshold = 80;
+  const threshold = 48;
   return chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < threshold;
 }
 
 function scrollToLatest(behavior = "smooth") {
-  requestAnimationFrame(() => chatBox.scrollTo({ top: chatBox.scrollHeight, behavior }));
+  requestAnimationFrame(() => {
+    chatBox.scrollTo({ top: chatBox.scrollHeight, behavior });
+    newMessagesButton.classList.remove("visible");
+  });
 }
+
+newMessagesButton.onclick = () => scrollToLatest("smooth");
+chatBox.addEventListener("scroll", () => {
+  if (shouldAutoScroll()) newMessagesButton.classList.remove("visible");
+}, { passive: true });
 
 // --- PAGE TITLE NOTIFICATIONS ---
 const originalTitle = document.title;
@@ -800,6 +802,12 @@ messageInput.addEventListener("keydown", e=>{ if(e.key==="Enter"&&!e.shiftKey){ 
 
 function timeNow(){ return new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[character]);
+}
+
 function addMessage(name,text,img,time,key,data){
 const stickToBottom = !initialMessagesLoaded || shouldAutoScroll();
 const m=document.createElement("div");
@@ -810,13 +818,13 @@ const side = (auth.currentUser && data.uid === auth.currentUser.uid)
 m.dataset.key=key;
 let ownerStar = (name==="wolf")?'<span class="owner-star">★</span>':'';
 let bubbleHTML = `
-${side==="other"?`<img src="${img}" class="clickable-avatar">`:``}
+${side==="other"?`<img src="${escapeHtml(img)}" class="clickable-avatar">`:``}
 <div class="bubble">
-  <div class="name">${name}${ownerStar}</div>
-  ${text}
+  <div class="name">${escapeHtml(name)}${ownerStar}</div>
+  ${escapeHtml(text)}
   <div class="time">${time}</div>
 </div>
-${side==="user"?`<img src="${img}" class="clickable-avatar">`:``}
+${side==="user"?`<img src="${escapeHtml(img)}" class="clickable-avatar">`:``}
 `;
 
 m.innerHTML = bubbleHTML;
@@ -845,6 +853,8 @@ bubble.innerHTML = twemoji.parse(bubble.innerHTML, {
 
 if (stickToBottom) {
   scrollToLatest(initialMessagesLoaded ? "smooth" : "auto");
+} else {
+  newMessagesButton.classList.add("visible");
 }
 
 if(!firstMessageLoaded){
@@ -857,11 +867,12 @@ setTimeout(()=>{ chatLoading.style.display="none"; },500);
 }
 
 window.addEventListener("load", () => {
-  // Realtime callbacks can finish before layout settles on slow connections.
-  setTimeout(() => {
+  // Let the initial batch paint, then lock in the reader's position. New
+  // messages only scroll when the reader is already at the bottom.
+  initialMessagesTimer = setTimeout(() => {
     initialMessagesLoaded = true;
     scrollToLatest("auto");
-  }, 1600);
+  }, 300);
 });
 
 setTimeout(() => {
@@ -889,6 +900,40 @@ async function getProfileFromAccount(uid) {
   }
 }
 
+function isRemoteImageUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeProfile(profile = {}) {
+  const clean = {
+    username: typeof profile.username === "string" ? profile.username.trim().slice(0, 40) : "",
+    displayName: typeof profile.displayName === "string" ? profile.displayName.trim().slice(0, 80) : "",
+    pronouns: typeof profile.pronouns === "string" ? profile.pronouns.trim().slice(0, 40) : "",
+    bio: typeof profile.bio === "string" ? profile.bio.trim().slice(0, 500) : "",
+    status: typeof profile.status === "string" ? profile.status.trim().slice(0, 160) : "",
+    pfp: isRemoteImageUrl(profile.pfp) ? profile.pfp : "",
+    banner: isRemoteImageUrl(profile.banner) ? profile.banner : "",
+    profileColor: typeof profile.profileColor === "string" ? profile.profileColor : "#1e3a8a",
+    profileCardBg: typeof profile.profileCardBg === "string" ? profile.profileCardBg : "#111111",
+    lastFmUser: typeof profile.lastFmUser === "string" ? profile.lastFmUser.trim().slice(0, 100) : "",
+    badges: Array.isArray(profile.badges) ? profile.badges.filter(b => typeof b === "string").map(b => b.trim().slice(0, 30)).filter(Boolean).slice(0, 12) : [],
+    joinDate: typeof profile.joinDate === "string" ? profile.joinDate : "",
+    socials: {
+      website: isRemoteImageUrl(profile.socials?.website) ? profile.socials.website : "",
+      github: isRemoteImageUrl(profile.socials?.github) ? profile.socials.github : ""
+    },
+    favoriteSong: typeof profile.favoriteSong === "string" ? profile.favoriteSong.trim().slice(0, 160) : "",
+    messageCount: Number.isFinite(Number(profile.messageCount)) ? Number(profile.messageCount) : 0
+  };
+  return clean;
+}
+
 window.sendMessage = async () => {
   if (!auth.currentUser) {
     showStatusPopup("You must be logged in to send messages.", 2000);
@@ -902,14 +947,17 @@ window.sendMessage = async () => {
 
   const uid = auth.currentUser.uid;
 
-  const profile = await getProfileFromAccount(uid);
+  const profile = sanitizeProfile(getProfileLayout());
+  profile.messageCount += 1;
 
   await push(messagesRootRef, {
     uid,
     text,
-    ts: Date.now()
+    ts: Date.now(),
+    profile
   });
   await set(ref(db, `profiles/${uid}/profileData/messageCount`), increment(1));
+  localStorage.setItem("messageCount", String(profile.messageCount));
   scrollToLatest();
 };
 
@@ -1082,7 +1130,7 @@ function getProfileLayout() {
     }
   };
 
-  return {
+  const layout = {
     username: localStorage.getItem("username") || "",
     displayName: localStorage.getItem("displayName") || "",
     pronouns: localStorage.getItem("pronouns") || "",
@@ -1099,20 +1147,27 @@ function getProfileLayout() {
     favoriteSong: localStorage.getItem("favoriteSong") || "",
     messageCount: parseInt(localStorage.getItem("messageCount") || "0")
   };
+  return sanitizeProfile(layout);
 }
 
 function getSyncSafeProfileData(layout) {
-  const syncData = { ...layout };
-  const droppedFields = [];
+  const droppedFields = ["pfp", "banner"].filter(field =>
+    typeof layout[field] === "string" && layout[field].trim().startsWith("data:")
+  );
+  return { syncData: sanitizeProfile(layout), droppedFields };
+}
 
-  ["pfp", "banner"].forEach(field => {
-    if (typeof syncData[field] === "string" && syncData[field].startsWith("data:")) {
-      syncData[field] = "";
-      droppedFields.push(field);
-    }
+function saveImportedProfile(layout) {
+  const profile = sanitizeProfile(layout);
+  const droppedFields = ["pfp", "banner"].filter(field =>
+    typeof layout[field] === "string" && layout[field].trim().startsWith("data:")
+  );
+  Object.entries(profile).forEach(([key, value]) => {
+    localStorage.setItem(key, typeof value === "object" ? JSON.stringify(value) : String(value));
   });
-
-  return { syncData, droppedFields };
+  username = profile.username || "PLAYER";
+  userPFP = profile.pfp || "https://via.placeholder.com/36";
+  return { profile, droppedFields };
 }
 
 function hydrateProfileFields(layout) {
@@ -1150,26 +1205,7 @@ document.getElementById("importLayoutBtn").onclick = () => {
     try {
       const layout = JSON.parse(e.target.result);
 
-      const fields = [
-        "username",
-       "displayName",
-       "pronouns",
-        "bio",
-       "status",
-        "banner",
-        "profileColor",
-        "profileCardBg",
-        "pfp",
-        "lastFmUser"
-      ];
-      fields.forEach(field => {
-        if (typeof layout[field] === "string") {
-          localStorage.setItem(field, layout[field]);
-        }
-      });
-
-      username = localStorage.getItem("username") || "PLAYER";
-      userPFP = localStorage.getItem("pfp") || "https://via.placeholder.com/36";
+      const { droppedFields } = saveImportedProfile(layout);
 
       hydrateProfileFields(getProfileLayout());
       updateLastFmPresence();
@@ -1179,7 +1215,10 @@ document.getElementById("importLayoutBtn").onclick = () => {
         ? `Connected as ${restoredLastFmUser}`
         : "Not connected.";
 
-      alert("Layout imported successfully.");
+      saveProfileToAccount();
+      alert(droppedFields.length
+        ? "Layout imported. Base64 images were removed; use image URLs instead."
+        : "Layout imported successfully.");
     } catch {
       alert("Invalid layout file.");
     }
@@ -1461,6 +1500,15 @@ setInterval(updateLastFmPresence, 5000);
 // On page load, restore if user had connected before
 const overlay = document.getElementById("firstLaunchOverlay");
 
+// Never keep legacy data-URI images in browser storage. They make exports and
+// Realtime Database writes unnecessarily large; profiles now use remote URLs.
+["pfp", "banner"].forEach(field => {
+  const storedImage = localStorage.getItem(field);
+  if (storedImage && storedImage.trim().startsWith("data:")) {
+    localStorage.removeItem(field);
+  }
+});
+
 if (!localStorage.getItem("username")) {
   overlay.classList.add("active");
 } else {
@@ -1522,12 +1570,7 @@ document.getElementById("firstImportBtn").onclick = () => {
     try {
       const layout = JSON.parse(e.target.result);
 
-      Object.keys(layout).forEach(key => {
-        localStorage.setItem(key, layout[key]);
-      });
-
-      username = localStorage.getItem("username");
-      userPFP = localStorage.getItem("pfp");
+      saveImportedProfile(layout);
 
       saveProfileToAccount();
       finishFirstLaunch();
