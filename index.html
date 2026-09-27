@@ -180,28 +180,20 @@ input[type="file"], input[type="text"], input[type="password"] { width: 100%; pa
 }
 
 .profile-card {
-  --profile-color: #1e3a8a; /* default fallback */
-
-  width: auto;
-  min-width: 340px;
-  max-width: 90vw;
-
+  width: auto;                 /* allow it to grow (should fix ur profile lol)*/
+  min-width: 340px;            /* default size */
+  max-width: 90vw;             /* prevent from going off screen */
   background: #111827;
-  border: 2px solid var(--profile-color);
+  border: 2px solid #1e3a8a;
   border-radius: 8px;
-
-  overflow-wrap: break-word;
-  word-break: break-word;
-
+  overflow-wrap: break-word;   /* wrap long words */
+  word-break: break-word;      /* force break if needed */
   animation: profileIn 0.25s ease;
-  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+  transition: box-shadow 0.3s ease;
 }
 
 .profile-card.listening {
-  box-shadow:
-    0 0 12px var(--profile-color),
-    0 0 25px var(--profile-color),
-    0 0 40px var(--profile-color);
+  box-shadow: 0 0 25px #3b82f6;
 }
 
 @keyframes profileIn {
@@ -287,109 +279,9 @@ input[type="file"], input[type="text"], input[type="password"] { width: 100%; pa
   margin-bottom: 14px;
 }
 
-/* INTRO SCREEN */
-.intro-screen {
-  position: fixed;
-  inset: 0;
-  background: black;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  flex-direction: column;
-  z-index: 9999;
-  opacity: 1;
-  transition: opacity 0.8s ease;
-}
-
-.intro-screen.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.intro-title {
-  font-size: 18px;
-  margin-bottom: 30px;
-  opacity: 0;
-  transform: translateY(20px);
-  animation: introFade 1.2s ease forwards;
-}
-
-.intro-button {
-  font-family: 'Minecraftia', monospace;
-  font-size: 12px;
-  padding: 10px 20px;
-  border: 2px solid #1e3a8a;
-  background: #020617;
-  color: #c7d2fe;
-  cursor: pointer;
-  opacity: 0;
-  transform: translateY(20px);
-  animation: introFade 1.2s ease forwards;
-  animation-delay: 0.6s;
-}
-
-.intro-button:hover {
-  background: #2563eb;
-  transform: translateY(0) scale(1.05);
-  transition: transform 0.2s ease, background 0.2s ease;
-}
-
-@keyframes introFade {
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Subtitle */
-.intro-subtitle {
-  font-size: 10px;
-  color: #93c5fd;
-  opacity: 0;
-  transform: translateY(20px);
-  animation: introFade 1.5s ease forwards;
-  animation-delay: 0.3s;
-  letter-spacing: 1px;
-}
-
-/* Glitch spark effect */
-.intro-glitch {
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  pointer-events: none;
-  background: repeating-radial-gradient(circle, rgba(255,255,255,0.05), rgba(255,255,255,0.05) 1px, transparent 1px, transparent 3px);
-  animation: glitchAnim 0.6s infinite;
-  mix-blend-mode: overlay;
-}
-
-@keyframes glitchAnim {
-  0% { transform: translate(0,0); opacity:0.1; }
-  25% { transform: translate(2px,-1px); opacity:0.15; }
-  50% { transform: translate(-2px,1px); opacity:0.12; }
-  75% { transform: translate(1px,-2px); opacity:0.18; }
-  100% { transform: translate(0,0); opacity:0.1; }
-}
-
-/* Optional: subtle title shimmer */
-.intro-title {
-  position: relative;
-}
-
-@keyframes shine {
-  0% { left: -100%; }
-  100% { left: 100%; }
-}
-
 </style>
 </head>
 <body>
-
-<!-- INTRO SCREEN -->
-<div id="introScreen" class="intro-screen">
-  <div class="intro-title">welcome to wolfchat.</div>
-  <button class="intro-button" id="enterBtn">enter</button>
-  <div class="intro-glitch"></div>
-</div>
 
 <button class="settings-btn" onclick="toggleSettings()">⚙</button>
 
@@ -494,7 +386,6 @@ Not connected.
     working delete button (u)<br>
     profile colors (u)<br>
     new user screen (replaces player - u)<br>
-    fixed crashing issue (u)<br>
     fixed issue with last.fm connection erroring out randomly (u)<br>
     <br><br>
     typing animations (a)<br>
@@ -507,7 +398,6 @@ Not connected.
     reply system (a)<br>
     dms (a)<br>
     other chat rooms (a)<br>
-    cap to messages to fix crashing issue (a)<br>
     <br><br>
     thats probably all that im gonna add for now, but ask if you want anything else.<br>
     - wolf/owner.
@@ -551,16 +441,14 @@ Not connected.
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js"></script>
 
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import {
-getDatabase, ref, push, onChildAdded, onChildRemoved, remove, child, query, limitToLast, onValue
-} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js";
+getDatabase, ref, push, onChildAdded, remove, child, query, limitToLast, onValue
+} from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 /* Firebase setup */
-const firebaseConfig = { apiKey:"AIzaSyBg5DGLubsHuH3ub3AtzpRenSMH6x1hZPs", authDomain:"wolfchatlol.firebaseapp.com", databaseURL:"https://wolfchatlol-default-rtdb.firebaseio.com", projectId:"wolfchatlol", storageBucket:"wolfchatlol.firebasestorage.app", messagingSenderId:"654485297853", appId:"1:654485297853:web:b1b93e7d7cef780fd275d4", measurementId:"G-P6J72RZEX1" };
+const firebaseConfig = { apiKey:"AIzaSyA1o5lWz_Jfc3zI0BIkTKq7jFcqfugUyRA", authDomain:"w0lfchat.firebaseapp.com", databaseURL:"https://w0lfchat-default-rtdb.firebaseio.com/", projectId:"w0lfchat", storageBucket:"w0lfchat.firebasestorage.app", messagingSenderId:"450627197800", appId:"1:450627197800:web:facda7859980f4e570d4dd" };
 const app=initializeApp(firebaseConfig);
-const analytics=getAnalytics(app);
 const db=getDatabase(app);
 const messagesRootRef = ref(db, "messages");
 const messagesQuery = query(messagesRootRef, limitToLast(100));
@@ -719,6 +607,8 @@ onChildAdded(messagesQuery, snap => {
     document.title = `(${unreadCount}) ${originalTitle}`;
   }
 });
+
+import { onChildRemoved } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 onChildRemoved(messagesRootRef, snap => {
   const key = snap.key;
@@ -1277,18 +1167,6 @@ document.getElementById("firstImportBtn").onclick = () => {
   };
 
   reader.readAsText(file);
-};
-
-/* INTRO SCREEN LOGIC */
-const introScreen = document.getElementById("introScreen");
-const enterBtn = document.getElementById("enterBtn");
-
-enterBtn.onclick = () => {
-  introScreen.classList.add("hidden");
-
-  setTimeout(() => {
-    introScreen.style.display = "none";
-  }, 800);
 };
 
 </script>
