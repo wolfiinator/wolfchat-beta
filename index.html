@@ -441,14 +441,25 @@ Not connected.
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js"></script>
 
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js";
 import {
-getDatabase, ref, push, onChildAdded, remove, child, query, limitToLast, onValue
-} from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+getDatabase, ref, push, onChildAdded, onChildRemoved, remove, child, query, limitToLast, onValue
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js";
 
 /* Firebase setup */
-const firebaseConfig = { apiKey:"AIzaSyBg5DGLubsHuH3ub3AtzpRenSMH6x1hZPs", authDomain:"wolfchatlol.firebaseapp.com", databaseURL:"https://wolfchatlol-default-rtdb.firebaseio.com/", projectId:"wolfchatlol", storageBucket:"wolfchatlol.firebasestorage.app", messagingSenderId:"654485297853", appId:"1:654485297853:web:b1b93e7d7cef780fd275d4" };
+const firebaseConfig = {
+  apiKey: "AIzaSyBg5DGLubsHuH3ub3AtzpRenSMH6x1hZPs",
+  authDomain: "wolfchatlol.firebaseapp.com",
+  databaseURL: "https://wolfchatlol-default-rtdb.firebaseio.com",
+  projectId: "wolfchatlol",
+  storageBucket: "wolfchatlol.firebasestorage.app",
+  messagingSenderId: "654485297853",
+  appId: "1:654485297853:web:b1b93e7d7cef780fd275d4",
+  measurementId: "G-P6J72RZEX1"
+};
 const app=initializeApp(firebaseConfig);
+const analytics=getAnalytics(app);
 const db=getDatabase(app);
 const messagesRootRef = ref(db, "messages");
 const messagesQuery = query(messagesRootRef, limitToLast(100));
@@ -607,8 +618,6 @@ onChildAdded(messagesQuery, snap => {
     document.title = `(${unreadCount}) ${originalTitle}`;
   }
 });
-
-import { onChildRemoved } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 onChildRemoved(messagesRootRef, snap => {
   const key = snap.key;
