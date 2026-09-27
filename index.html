@@ -12,6 +12,9 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
+color-scheme: dark;
+scrollbar-color: #1e3a8a #020617;
+scrollbar-width: thin;
 width: 100%;
 height: 100%;
 font-family: 'Minecraftia', monospace;
@@ -87,6 +90,14 @@ margin-bottom: 10px;
 }
 .chat-box.loaded { opacity: 1; }
 
+/* Keep browser chrome and focus states inside the blue/black palette. */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: #020617; }
+*::-webkit-scrollbar-thumb { background: #1e3a8a; border: 2px solid #020617; border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: #2563eb; }
+input:focus, button:focus-visible { outline: 2px solid #2563eb; outline-offset: -2px; }
+input:focus { border-color: #2563eb; }
+
 .message { display: flex; margin-bottom: 14px; align-items: flex-end; animation: msgIn 0.25s ease-out; }
 @keyframes msgIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 .message.user { justify-content: flex-end; }
@@ -112,8 +123,9 @@ margin-left: 6px;
 .bubble button:hover { background: grey; color: black; }
 
 /* INPUT */
-.input-box { display: flex; align-items: center; border-top: 2px solid #1e3a8a; }
-.input-box input { flex: 1; padding: 14px; background: transparent; border: none; color: #e0e7ff; font-family: inherit; }
+.input-box { display: flex; align-items: center; border-top: 2px solid #1e3a8a; background: #020617; }
+.input-box input { flex: 1; min-width: 0; padding: 14px; background: transparent; border: none; color: #e0e7ff; font-family: inherit; }
+.input-box input:focus { outline: none; border: none; box-shadow: inset 0 0 0 2px #2563eb; }
 .input-box button { padding: 14px 22px; font-family: inherit; background: #1e3a8a; border: none; color: white; cursor: pointer; }
 
 .connection-indicator {
@@ -468,8 +480,8 @@ Not connected.
 <input id="usernameInput" placeholder="Enter username">
 <button class="tab-btn" id="setUsernameBtn">SET USERNAME</button>
 
-<label>PROFILE IMAGE</label>
-<input type="file" accept="image/*" id="pfpUpload">
+<label>PROFILE IMAGE URL</label>
+<input type="url" id="pfpUrlInput" placeholder="https://example.com/avatar.png">
 <button class="tab-btn" id="setPfpBtn">SET PROFILE IMAGE</button>
 
 <label>DISPLAY NAME</label>
@@ -488,8 +500,8 @@ Not connected.
 <input id="statusInput" placeholder="What's on your mind?">
 <button class="tab-btn" id="setStatusBtn">SET STATUS</button>
 
-<label>BANNER IMAGE</label>
-<input type="file" accept="image/*" id="bannerUpload">
+<label>BANNER IMAGE URL</label>
+<input type="url" id="bannerUrlInput" placeholder="https://example.com/banner.png">
 <button class="tab-btn" id="setBannerBtn">SET BANNER</button>
 
 <label>PROFILE BORDER COLOR</label>
@@ -564,8 +576,8 @@ Not connected.
     <label>choose a username</label>
     <input id="firstUsername" placeholder="enter username">
 
-    <label>choose a profile picture</label>
-    <input type="file" accept="image/*" id="firstPfp">
+    <label>profile picture URL (optional)</label>
+    <input type="url" id="firstPfpUrl" placeholder="https://example.com/avatar.png">
 
     <button id="firstCreateBtn">create profile</button>
 
@@ -652,7 +664,8 @@ import {
   query,
   limitToLast,
   onValue,
-  onChildRemoved
+  onChildRemoved,
+  increment
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 /* Firebase setup */
@@ -669,22 +682,11 @@ const firebaseConfig = {
 const app=initializeApp(firebaseConfig);
 const db=getDatabase(app);
 const auth = getAuth(app);
-const JSONBIN_BASE_URL = "https://api.jsonbin.io/v3/b";
-const JSONBIN_ACCESS_KEY = "$2a$10$T1k9bIUQG/tPk563G8sJuesPsLleH8yDlcCYGvL0M1q8IHQqwQxe6";
 
-function getJsonBinAccessKey() {
-  return localStorage.getItem("jsonbinAccessKey") || JSONBIN_ACCESS_KEY;
-}
-
-import { get, ref as dbRef } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
-
-get(dbRef(db, "messages")).then(snap => {
-  console.log("TEST READ:", snap.exists(), snap.val());
-}).catch(err => {
-  console.error("READ FAILED:", err);
-});
+import { get } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 const renderedMessages = new Set();
+let initialMessagesLoaded = false;
 
 const messagesRootRef = ref(db, "messages");
 const messagesQuery = query(messagesRootRef, limitToLast(50));
@@ -703,11 +705,7 @@ onChildAdded(messagesQuery, async (snap) => {
   try {
     let profile = null;
 
-    if (msg.profileUrl) {
-      profile = await fetchProfileByUrl(msg.profileUrl);
-    }
-
-    if (!profile && msg.uid) {
+    if (msg.uid) {
       profile = await getProfileFromAccount(msg.uid);
     }
 
@@ -762,7 +760,6 @@ connectionIndicator.title="🔴 - terrible connection.";
 });
 }
 updateConnectionStatus();
-setInterval(updateConnectionStatus,20000);
 
 /* Chat */
 const chatBox=document.getElementById("chatBox");
@@ -773,7 +770,6 @@ let userPFP = localStorage.getItem("pfp");
 let isOwner=false;
 let firstMessageLoaded=false;
 
-const profileCache = {};
 let lastNowPlaying = null; // tracks last track sent to chat
 
 function shouldAutoScroll() {
@@ -781,64 +777,8 @@ function shouldAutoScroll() {
   return chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < threshold;
 }
 
-async function fetchProfileByUrl(profileUrl) {
-  if (!profileUrl) return null;
-  if (profileCache[profileUrl]) return profileCache[profileUrl];
-
-  const jsonBinKey = getJsonBinAccessKey();
-  if (!jsonBinKey) {
-    return null;
-  }
-
-  try {
-    const res = await fetch(profileUrl, {
-      headers: { "X-Access-Key": jsonBinKey }
-    });
-    if (!res.ok) return null;
-    const payload = await res.json();
-    const profile = payload.record || null;
-    if (profile) profileCache[profileUrl] = profile;
-    return profile;
-  } catch (error) {
-    console.error("JSONBin read failed:", error);
-    return null;
-  }
-}
-
-async function upsertProfileToJsonBin(profileData) {
-  const jsonBinKey = getJsonBinAccessKey();
-  if (!jsonBinKey) {
-    showStatusPopup("Set localStorage.jsonbinAccessKey first.", 3500);
-    throw new Error("Missing JSONBin access key.");
-  }
-
-  const existingBinId = localStorage.getItem("profileBinId");
-  const url = existingBinId ? `${JSONBIN_BASE_URL}/${existingBinId}` : JSONBIN_BASE_URL;
-  const method = existingBinId ? "PUT" : "POST";
-
-  const res = await fetch(url, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Access-Key": jsonBinKey
-    },
-    body: JSON.stringify(profileData)
-  });
-
-  if (!res.ok) {
-    throw new Error(`JSONBin write failed with status ${res.status}`);
-  }
-
-  const payload = await res.json();
-  const binId = payload.metadata?.id || existingBinId;
-  if (!binId) throw new Error("JSONBin response missing bin id.");
-
-  const profileUrl = `${JSONBIN_BASE_URL}/${binId}/latest`;
-  localStorage.setItem("profileBinId", binId);
-  localStorage.setItem("profileUrl", profileUrl);
-  profileCache[profileUrl] = profileData;
-
-  return { binId, profileUrl };
+function scrollToLatest(behavior = "smooth") {
+  requestAnimationFrame(() => chatBox.scrollTo({ top: chatBox.scrollHeight, behavior }));
 }
 
 // --- PAGE TITLE NOTIFICATIONS ---
@@ -861,7 +801,7 @@ messageInput.addEventListener("keydown", e=>{ if(e.key==="Enter"&&!e.shiftKey){ 
 function timeNow(){ return new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
 
 function addMessage(name,text,img,time,key,data){
-const stickToBottom = shouldAutoScroll();
+const stickToBottom = !initialMessagesLoaded || shouldAutoScroll();
 const m=document.createElement("div");
 const side = (auth.currentUser && data.uid === auth.currentUser.uid)
   ? "user"
@@ -904,7 +844,7 @@ bubble.innerHTML = twemoji.parse(bubble.innerHTML, {
 });
 
 if (stickToBottom) {
-  chatBox.scrollTop = chatBox.scrollHeight;
+  scrollToLatest(initialMessagesLoaded ? "smooth" : "auto");
 }
 
 if(!firstMessageLoaded){
@@ -913,7 +853,16 @@ chatLoading.style.opacity=0;
 chatBox.classList.add("loaded");
 setTimeout(()=>{ chatLoading.style.display="none"; },500);
 }
+
 }
+
+window.addEventListener("load", () => {
+  // Realtime callbacks can finish before layout settles on slow connections.
+  setTimeout(() => {
+    initialMessagesLoaded = true;
+    scrollToLatest("auto");
+  }, 1600);
+});
 
 setTimeout(() => {
   if (!firstMessageLoaded) {
@@ -930,14 +879,7 @@ async function getProfileFromAccount(uid) {
     const snap = await get(ref(db, "profiles/" + uid));
     if (snap.exists()) {
       const profileRefData = snap.val();
-      if (profileRefData?.profileUrl) {
-        const fromJsonBin = await fetchProfileByUrl(profileRefData.profileUrl);
-        if (fromJsonBin) return fromJsonBin;
-      }
-      if (profileRefData?.profileData && typeof profileRefData.profileData === "object") {
-        return profileRefData.profileData;
-      }
-      return profileRefData || {};
+      return profileRefData?.profileData || profileRefData || {};
     } else {
       return {};
     }
@@ -962,29 +904,13 @@ window.sendMessage = async () => {
 
   const profile = await getProfileFromAccount(uid);
 
-  const finalUsername =
-    profile.username ||
-    localStorage.getItem("username") ||
-    "PLAYER";
-
-  const finalPfp =
-    profile.pfp ||
-    localStorage.getItem("pfp") ||
-    "https://via.placeholder.com/36";
-
-  const profileUrl =
-    profile.profileUrl ||
-    localStorage.getItem("profileUrl") ||
-    null;
-
-  push(messagesRootRef, {
+  await push(messagesRootRef, {
     uid,
     text,
-    ts: Date.now(),
-    profileUrl,
-    username: finalUsername,
-    pfp: finalPfp
+    ts: Date.now()
   });
+  await set(ref(db, `profiles/${uid}/profileData/messageCount`), increment(1));
+  scrollToLatest();
 };
 
 onChildRemoved(ref(db,"messages"), snap => {
@@ -1020,15 +946,6 @@ window.saveProfile = () => {
   localStorage.setItem("pronouns", pronounsInput.value.trim());
   localStorage.setItem("bio", bioInput.value.trim());
 
-  const pfpUpload = document.getElementById("pfpUpload");
-  if (pfpUpload.files[0]) {
-    const reader = new FileReader();
-    reader.onload = e => {
-      userPFP = e.target.result;
-      localStorage.setItem("pfp", userPFP);
-    };
-    reader.readAsDataURL(pfpUpload.files[0]);
-  }
   saveProfileToAccount();
   alert("Profile saved!");
 };
@@ -1040,41 +957,21 @@ function safeSetLocalStorage(key, value) {
     return true;
   } catch (err) {
     console.error(`Failed to save ${key} locally:`, err);
-    showStatusPopup("Storage is full. Use a smaller image and try again.", 3200);
+    showStatusPopup("Local storage is full. Remove old profile data and try again.", 3200);
     return false;
   }
 }
 
-function optimizeImageFile(file, {
-  maxWidth = 1400,
-  maxHeight = 500,
-  mimeType = "image/jpeg",
-  quality = 0.82
-} = {}) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const img = new Image();
-      img.onload = () => {
-        const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
-        const width = Math.max(1, Math.round(img.width * scale));
-        const height = Math.max(1, Math.round(img.height * scale));
-
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return reject(new Error("Canvas unavailable."));
-
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL(mimeType, quality));
-      };
-      img.onerror = () => reject(new Error("Invalid image file."));
-      img.src = e.target.result;
-    };
-    reader.onerror = () => reject(new Error("Failed to read file."));
-    reader.readAsDataURL(file);
-  });
+function normalizeImageUrl(value) {
+  const url = value.trim();
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Unsupported protocol");
+    return parsed.href;
+  } catch {
+    throw new Error("Enter a valid http(s) image URL.");
+  }
 }
 
 document.getElementById("setUsernameBtn").onclick = () => {
@@ -1108,31 +1005,21 @@ document.getElementById("setBioBtn").onclick = () => {
 };
 
 document.getElementById("setPfpBtn").onclick = () => {
-  const file = document.getElementById("pfpUpload").files[0];
-  if (!file) return alert("Select an image first.");
-
-  const reader = new FileReader();
-  reader.onload = e => {
-    userPFP = e.target.result;
+  try {
+    userPFP = normalizeImageUrl(document.getElementById("pfpUrlInput").value);
     localStorage.setItem("pfp", userPFP);
     saveProfileToAccount();
-    alert("Profile picture updated.");
-  };
-  reader.readAsDataURL(file);
+    showStatusPopup("Profile picture updated.");
+  } catch (error) { showStatusPopup(error.message, 2500); }
 };
 
 document.getElementById("setBannerBtn").onclick = () => {
-  const file = document.getElementById("bannerUpload").files[0];
-  if (!file) return alert("Select a banner first.");
-
-  optimizeImageFile(file).then(optimizedBanner => {
-    if (!safeSetLocalStorage("banner", optimizedBanner)) return;
+  try {
+    const banner = normalizeImageUrl(document.getElementById("bannerUrlInput").value);
+    if (!safeSetLocalStorage("banner", banner)) return;
     saveProfileToAccount();
-    alert("Banner updated.");
-  }).catch(err => {
-    console.error("Banner processing failed:", err);
-    showStatusPopup("Couldn't process banner image.", 2600);
-  });
+    showStatusPopup("Banner updated.");
+  } catch (error) { showStatusPopup(error.message, 2500); }
 };
 
 document.getElementById("setColorBtn").onclick = () => {
@@ -1214,35 +1101,12 @@ function getProfileLayout() {
   };
 }
 
-const MAX_PROFILE_IMAGE_BYTES = 900 * 1024; // keep profile docs well under remote payload limits
-
-function estimateDataUrlBytes(value) {
-  if (typeof value !== "string" || !value.startsWith("data:")) return 0;
-  const commaIndex = value.indexOf(",");
-  if (commaIndex === -1) return value.length;
-
-  const meta = value.slice(0, commaIndex);
-  const payload = value.slice(commaIndex + 1);
-
-  if (meta.includes(";base64")) {
-    const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
-    return Math.max(0, Math.floor((payload.length * 3) / 4) - padding);
-  }
-
-  try {
-    return decodeURIComponent(payload).length;
-  } catch {
-    return payload.length;
-  }
-}
-
 function getSyncSafeProfileData(layout) {
   const syncData = { ...layout };
   const droppedFields = [];
 
   ["pfp", "banner"].forEach(field => {
-    const bytes = estimateDataUrlBytes(syncData[field]);
-    if (bytes > MAX_PROFILE_IMAGE_BYTES) {
+    if (typeof syncData[field] === "string" && syncData[field].startsWith("data:")) {
       syncData[field] = "";
       droppedFields.push(field);
     }
@@ -1257,6 +1121,8 @@ function hydrateProfileFields(layout) {
   document.getElementById("pronounsInput").value = layout.pronouns || "";
   document.getElementById("bioInput").value = layout.bio || "";
   document.getElementById("statusInput").value = layout.status || "";
+  document.getElementById("pfpUrlInput").value = layout.pfp || "";
+  document.getElementById("bannerUrlInput").value = layout.banner || "";
   document.getElementById("colorPicker").value = layout.profileColor || "#1e3a8a";
   document.getElementById("lastFmUsername").value = layout.lastFmUser || "";
 }
@@ -1625,7 +1491,6 @@ if (profileModal) {
 
 document.getElementById("firstCreateBtn").onclick = () => {
   const name = document.getElementById("firstUsername").value.trim();
-  const file = document.getElementById("firstPfp").files[0];
 
   if (!name) {
     alert("Enter a username.");
@@ -1635,19 +1500,12 @@ document.getElementById("firstCreateBtn").onclick = () => {
   localStorage.setItem("username", name);
   username = name;
 
-  if (file) {
-    const reader = new FileReader();
-    reader.onload = e => {
-      userPFP = e.target.result;
-      localStorage.setItem("pfp", userPFP);
-      finishFirstLaunch();
-    };
-    reader.readAsDataURL(file);
-  } else {
-    userPFP = "https://via.placeholder.com/36";
+  try {
+    userPFP = normalizeImageUrl(document.getElementById("firstPfpUrl").value) || "https://via.placeholder.com/36";
     localStorage.setItem("pfp", userPFP);
+    saveProfileToAccount();
     finishFirstLaunch();
-  }
+  } catch (error) { showStatusPopup(error.message, 2500); }
 };
 
 function finishFirstLaunch() {
@@ -1671,6 +1529,7 @@ document.getElementById("firstImportBtn").onclick = () => {
       username = localStorage.getItem("username");
       userPFP = localStorage.getItem("pfp");
 
+      saveProfileToAccount();
       finishFirstLaunch();
     } catch {
       alert("Invalid profile file.");
@@ -1824,24 +1683,20 @@ async function saveProfileToAccount() {
     const uid = auth.currentUser.uid;
     const localProfileData = getProfileLayout();
     const { syncData: profileData, droppedFields } = getSyncSafeProfileData(localProfileData);
+    const existingProfile = await get(ref(db, `profiles/${uid}/profileData/messageCount`));
+    profileData.messageCount = existingProfile.exists()
+      ? existingProfile.val()
+      : profileData.messageCount;
     const profileDoc = {
       uid,
       profileData,
       updatedAt: Date.now()
     };
 
-    try {
-      const pointer = await upsertProfileToJsonBin(profileData);
-      profileDoc.profileUrl = pointer.profileUrl;
-      profileDoc.profileBinId = pointer.binId;
-    } catch (jsonBinError) {
-      console.warn("JSONBin unavailable, saving profile directly to Firebase.", jsonBinError);
-    }
-
     await set(ref(db, `profiles/${uid}`), profileDoc);
 
     if (droppedFields.length) {
-      showStatusPopup("Saved, but large image data was skipped for cloud sync.", 3200);
+      showStatusPopup("Saved. Use image URLs instead of uploaded files.", 3200);
     }
 
     console.log("Profile saved to account storage.");
@@ -1862,17 +1717,7 @@ onValue(profileRef, async (snap)=>{
   if(!snap.exists()) return;
 
   const data = snap.val();
-  if (data.profileUrl) {
-    localStorage.setItem("profileUrl", data.profileUrl);
-  }
-  if (data.profileBinId) {
-    localStorage.setItem("profileBinId", data.profileBinId);
-  }
-
-  const profileData = data.profileUrl ? await fetchProfileByUrl(data.profileUrl) : null;
-  const resolvedProfileData =
-    profileData ||
-    (data.profileData && typeof data.profileData === "object" ? data.profileData : null);
+  const resolvedProfileData = data.profileData && typeof data.profileData === "object" ? data.profileData : data;
 
   if (resolvedProfileData) {
     Object.keys(resolvedProfileData).forEach(k => {
