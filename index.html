@@ -41,7 +41,7 @@ animation: bgFade 12s ease infinite;
 }
 
 /* CHAT */
-.chat-container { width: 100vw; height: 100vh; height: 100dvh; display: flex; flex-direction: column; position: relative; }
+.chat-container { width: 100vw; height: 100vh; display: flex; flex-direction: column; position: relative; }
 
 .chat-loading {
 position: absolute;
@@ -75,16 +75,7 @@ margin-bottom: 10px;
 100% { transform: rotate(360deg); }
 }
 
-.chat-box {
-  flex: 1;
-  min-height: 0;
-  padding: 16px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  opacity: 0;
-  transition: opacity 0.5s ease;
-}
+.chat-box { flex: 1; padding: 16px; overflow-y: auto; opacity: 0; transition: opacity 0.5s ease; }
 .chat-box.loaded { opacity: 1; }
 
 .message { display: flex; margin-bottom: 14px; align-items: flex-end; animation: msgIn 0.25s ease-out; }
@@ -669,11 +660,6 @@ const firebaseConfig = {
 const app=initializeApp(firebaseConfig);
 const db=getDatabase(app);
 const auth = getAuth(app);
-const JSONBIN_BASE_URL = "https://api.jsonbin.io/v3/b";
-
-function getJsonBinAccessKey() {
-  return localStorage.getItem("jsonbinAccessKey") || "";
-}
 
 import { get, ref as dbRef } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
@@ -682,8 +668,6 @@ get(dbRef(db, "messages")).then(snap => {
 }).catch(err => {
   console.error("READ FAILED:", err);
 });
-
-const renderedMessages = new Set();
 
 const messagesRootRef = ref(db, "messages");
 const messagesQuery = query(messagesRootRef, limitToLast(50));
@@ -695,45 +679,30 @@ onChildAdded(messagesQuery, async (snap) => {
   if (renderedMessages.has(key)) return;
   renderedMessages.add(key);
 
-  let username = msg.username;
-  let pfp = msg.pfp;
-  let extraData = { uid: msg.uid, name: username || "PLAYER" };
+  // If message already contains profile info
+  if (msg.username && msg.pfp) {
+    addMessage(
+      msg.username,
+      msg.text,
+      msg.pfp,
+      new Date(msg.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      key,
+      msg
+    );
+  } else {
+    // fallback: fetch profile from database
+    const profileSnap = await get(ref(db, "profiles/" + msg.uid));
+    const profile = profileSnap.exists() ? profileSnap.val() : {};
 
-  try {
-    let profile = null;
-
-    if (msg.profileUrl) {
-      profile = await fetchProfileByUrl(msg.profileUrl);
-    }
-
-    if (!profile && msg.uid) {
-      profile = await getProfileFromAccount(msg.uid);
-    }
-
-    if (profile) {
-      username = profile.username || username || "PLAYER";
-      pfp = profile.pfp || pfp || "https://via.placeholder.com/36";
-      extraData = { ...profile, uid: msg.uid, name: username };
-    } else {
-      username = username || "PLAYER";
-      pfp = pfp || "https://via.placeholder.com/36";
-      extraData = { uid: msg.uid, name: username };
-    }
-  } catch (e) {
-    console.error("Profile fetch failed:", e);
-    username = username || "PLAYER";
-    pfp = pfp || "https://via.placeholder.com/36";
-    extraData = { uid: msg.uid, name: username };
+    addMessage(
+      profile.username || "PLAYER",
+      msg.text,
+      profile.pfp || "https://via.placeholder.com/36",
+      new Date(msg.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      key,
+      profile
+    );
   }
-
-  addMessage(
-    username,
-    msg.text,
-    pfp,
-    new Date(msg.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    key,
-    extraData
-  );
 });
 
 /* Connection Indicator */
@@ -773,72 +742,8 @@ let isOwner=false;
 let firstMessageLoaded=false;
 
 const profileCache = {};
+const renderedMessages = new Set();
 let lastNowPlaying = null; // tracks last track sent to chat
-
-function shouldAutoScroll() {
-  const threshold = 80;
-  return chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < threshold;
-}
-
-async function fetchProfileByUrl(profileUrl) {
-  if (!profileUrl) return null;
-  if (profileCache[profileUrl]) return profileCache[profileUrl];
-
-  const jsonBinKey = getJsonBinAccessKey();
-  if (!jsonBinKey) {
-    return null;
-  }
-
-  try {
-    const res = await fetch(profileUrl, {
-      headers: { "X-Access-Key": jsonBinKey }
-    });
-    if (!res.ok) return null;
-    const payload = await res.json();
-    const profile = payload.record || null;
-    if (profile) profileCache[profileUrl] = profile;
-    return profile;
-  } catch (error) {
-    console.error("JSONBin read failed:", error);
-    return null;
-  }
-}
-
-async function upsertProfileToJsonBin(profileData) {
-  const jsonBinKey = getJsonBinAccessKey();
-  if (!jsonBinKey) {
-    showStatusPopup("Set localStorage.jsonbinAccessKey first.", 3500);
-    throw new Error("Missing JSONBin access key.");
-  }
-
-  const existingBinId = localStorage.getItem("profileBinId");
-  const url = existingBinId ? `${JSONBIN_BASE_URL}/${existingBinId}` : JSONBIN_BASE_URL;
-  const method = existingBinId ? "PUT" : "POST";
-
-  const res = await fetch(url, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Access-Key": jsonBinKey
-    },
-    body: JSON.stringify(profileData)
-  });
-
-  if (!res.ok) {
-    throw new Error(`JSONBin write failed with status ${res.status}`);
-  }
-
-  const payload = await res.json();
-  const binId = payload.metadata?.id || existingBinId;
-  if (!binId) throw new Error("JSONBin response missing bin id.");
-
-  const profileUrl = `${JSONBIN_BASE_URL}/${binId}/latest`;
-  localStorage.setItem("profileBinId", binId);
-  localStorage.setItem("profileUrl", profileUrl);
-  profileCache[profileUrl] = profileData;
-
-  return { binId, profileUrl };
-}
 
 // --- PAGE TITLE NOTIFICATIONS ---
 const originalTitle = document.title;
@@ -860,12 +765,9 @@ messageInput.addEventListener("keydown", e=>{ if(e.key==="Enter"&&!e.shiftKey){ 
 function timeNow(){ return new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
 
 function addMessage(name,text,img,time,key,data){
-const stickToBottom = shouldAutoScroll();
 const m=document.createElement("div");
-const side = (auth.currentUser && data.uid === auth.currentUser.uid)
-  ? "user"
-  : "other";
-  m.className=`message ${side}`;
+const side=name===username?"user":"other";
+m.className=`message ${side}`;
 m.dataset.key=key;
 let ownerStar = (name==="wolf")?'<span class="owner-star">★</span>':'';
 let bubbleHTML = `
@@ -896,15 +798,12 @@ m.querySelector(".bubble").appendChild(delBtn);
 }
 chatBox.appendChild(m);
 
-const bubble = m.querySelector(".bubble");
-bubble.innerHTML = twemoji.parse(bubble.innerHTML, {
-  folder: "svg",
-  ext: ".svg"
+twemoji.parse(m,{
+folder:'svg',
+ext:'.svg'
 });
 
-if (stickToBottom) {
-  chatBox.scrollTop = chatBox.scrollHeight;
-}
+chatBox.scrollTop=chatBox.scrollHeight;
 
 if(!firstMessageLoaded){
 firstMessageLoaded=true;
@@ -924,24 +823,28 @@ setTimeout(() => {
   }
 }, 1500);
 
-async function getProfileFromAccount(uid) {
-  try {
-    const snap = await get(ref(db, "profiles/" + uid));
-    if (snap.exists()) {
-      const profileRefData = snap.val();
-      if (profileRefData?.profileUrl) {
-        const fromJsonBin = await fetchProfileByUrl(profileRefData.profileUrl);
-        if (fromJsonBin) return fromJsonBin;
-      }
-      return profileRefData;
-    } else {
-      return {};
-    }
-  } catch (e) {
-    console.error("Profile fetch failed:", e);
-    return {};
+window.sendMessage = async () => {
+  if (!auth.currentUser) {
+    showStatusPopup("You must be logged in to send messages.", 2000);
+    return;
   }
-}
+
+  if (!messageInput.value.trim()) return;
+
+  const text = messageInput.value.trim();
+  messageInput.value = "";
+
+  const currentCount = parseInt(localStorage.getItem("messageCount") || "0") + 1;
+  localStorage.setItem("messageCount", currentCount);
+
+  set(ref(db, "profiles/" + auth.currentUser.uid + "/messageCount"), currentCount);
+
+  push(messagesRootRef, {
+    uid: auth.currentUser.uid,
+    text: text,
+    ts: Date.now()
+  });
+};
 
 window.sendMessage = async () => {
   if (!auth.currentUser) {
@@ -951,35 +854,16 @@ window.sendMessage = async () => {
 
   const text = messageInput.value.trim();
   if (!text) return;
-
   messageInput.value = "";
 
-  const uid = auth.currentUser.uid;
-
-  const profile = await getProfileFromAccount(uid);
-
-  const finalUsername =
-    profile.username ||
-    localStorage.getItem("username") ||
-    "PLAYER";
-
-  const finalPfp =
-    profile.pfp ||
-    localStorage.getItem("pfp") ||
-    "https://via.placeholder.com/36";
-
-  const profileUrl =
-    profile.profileUrl ||
-    localStorage.getItem("profileUrl") ||
-    null;
+  const profile = await getProfileFromAccount(auth.currentUser.uid);
 
   push(messagesRootRef, {
-    uid,
+    uid: auth.currentUser.uid,
     text,
     ts: Date.now(),
-    profileUrl,
-    username: finalUsername,
-    pfp: finalPfp
+    username: profile.username || "PLAYER",
+    pfp: profile.pfp || "https://via.placeholder.com/36"
   });
 };
 
@@ -1138,12 +1022,7 @@ function getProfileLayout() {
     profileColor: localStorage.getItem("profileColor") || "#1e3a8a",
     profileCardBg: localStorage.getItem("profileCardBg") || "#111111",
     pfp: localStorage.getItem("pfp") || "",
-    lastFmUser: localStorage.getItem("lastFmUser") || "",
-    badges: JSON.parse(localStorage.getItem("badges") || "[]"),
-    joinDate: localStorage.getItem("joinDate") || "",
-    socials: JSON.parse(localStorage.getItem("socials") || "{}"),
-    favoriteSong: localStorage.getItem("favoriteSong") || "",
-    messageCount: parseInt(localStorage.getItem("messageCount") || "0")
+    lastFmUser: localStorage.getItem("lastFmUser") || ""
   };
 }
 
@@ -1221,7 +1100,6 @@ document.getElementById("importLayoutBtn").onclick = () => {
 document.getElementById("setStatusBtn").onclick = () => {
   const val = document.getElementById("statusInput").value.trim();
   localStorage.setItem("status", val);
-  saveProfileToAccount();
   alert("Status updated.");
 };
 
@@ -1229,7 +1107,6 @@ document.getElementById("setJoinDateBtn").onclick = () => {
   const val = document.getElementById("joinDateInput").value;
   if (!val) return;
   localStorage.setItem("joinDate", val);
-  saveProfileToAccount();
   alert("Join date updated.");
 };
 
@@ -1237,14 +1114,12 @@ document.getElementById("setBadgesBtn").onclick = () => {
   const val = document.getElementById("badgesInput").value;
   const arr = val.split(",").map(b => b.trim()).filter(Boolean);
   localStorage.setItem("badges", JSON.stringify(arr));
-  saveProfileToAccount();
   alert("Badges updated.");
 };
 
 document.getElementById("setFavoriteSongBtn").onclick = () => {
   const val = document.getElementById("favoriteSongInput").value.trim();
   localStorage.setItem("favoriteSong", val);
-  saveProfileToAccount();
   alert("Favorite song updated.");
 };
 
@@ -1254,7 +1129,6 @@ document.getElementById("setSocialsBtn").onclick = () => {
     github: document.getElementById("githubInput").value.trim()
   };
   localStorage.setItem("socials", JSON.stringify(socials));
-  saveProfileToAccount();
   alert("Social links saved.");
 };
 
@@ -1710,29 +1584,41 @@ authStatus.textContent="Not logged in";
 function migrateLocalProfile(){
   if(!auth.currentUser) return;
 
-  saveProfileToAccount();
+  const profile = {
+    username: localStorage.getItem("username"),
+    displayName: localStorage.getItem("displayName"),
+    pronouns: localStorage.getItem("pronouns"),
+    bio: localStorage.getItem("bio"),
+    status: localStorage.getItem("status"),
+    pfp: localStorage.getItem("pfp"),        // ✅ FIXED
+    banner: localStorage.getItem("banner"),  // ✅ FIXED
+    profileColor: localStorage.getItem("profileColor"),
+    profileCardBg: localStorage.getItem("profileCardBg"),
+    lastFmUser: localStorage.getItem("lastFmUser"),
+    badges: JSON.parse(localStorage.getItem("badges") || "[]"),
+    joinDate: localStorage.getItem("joinDate"),
+    socials: JSON.parse(localStorage.getItem("socials") || "{}"),
+    favoriteSong: localStorage.getItem("favoriteSong")
+  };
+
+  set(ref(db,"profiles/"+auth.currentUser.uid), profile);
+
+  showStatusPopup("Profile synced to account!");
 }
 
-async function saveProfileToAccount() {
+function saveProfileToAccount() {
   if (!auth.currentUser) return;
 
-  try {
-    const uid = auth.currentUser.uid;
-    const profileData = getProfileLayout();
-    const pointer = await upsertProfileToJsonBin(profileData);
+  const uid = auth.currentUser.uid;
+  const profileData = getProfileLayout();
 
-    await set(ref(db, `profiles/${uid}`), {
-      uid,
-      profileUrl: pointer.profileUrl,
-      profileBinId: pointer.binId,
-      updatedAt: Date.now()
+  set(ref(db, `profiles/${uid}`), profileData)
+    .then(() => {
+      console.log("Profile saved to account.");
+    })
+    .catch(err => {
+      console.error("Failed to save profile:", err);
     });
-
-    console.log("Profile saved to JSONBin + Firebase pointer.");
-  } catch (err) {
-    console.error("Failed to save profile:", err);
-    showStatusPopup("Profile save failed.", 2500);
-  }
 }
 
 
@@ -1742,29 +1628,20 @@ if(!user) return;
 
 const profileRef=ref(db,"profiles/"+user.uid);
 
-onValue(profileRef, async (snap)=>{
+onValue(profileRef,(snap)=>{
   if(!snap.exists()) return;
 
   const data = snap.val();
-  if (data.profileUrl) {
-    localStorage.setItem("profileUrl", data.profileUrl);
-  }
-  if (data.profileBinId) {
-    localStorage.setItem("profileBinId", data.profileBinId);
-  }
 
-  const profileData = data.profileUrl ? await fetchProfileByUrl(data.profileUrl) : null;
-  if (profileData) {
-    Object.keys(profileData).forEach(k => {
-      if (profileData[k] !== undefined && profileData[k] !== null) {
-        if (typeof profileData[k] === "object") {
-          localStorage.setItem(k, JSON.stringify(profileData[k]));
-        } else {
-          localStorage.setItem(k, profileData[k]);
-        }
+  Object.keys(data).forEach(k => {
+    if (data[k] !== undefined && data[k] !== null) {
+      if (typeof data[k] === "object") {
+        localStorage.setItem(k, JSON.stringify(data[k]));
+      } else {
+        localStorage.setItem(k, data[k]);
       }
-    });
-  }
+    }
+  });
 
   hydrateProfileFields(getProfileLayout());
 });
